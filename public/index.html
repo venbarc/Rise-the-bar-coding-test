@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LLM Task Tracker</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="panel panel-chat">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Chat Console</p>
+            <h1>Task Ledger</h1>
+          </div>
+          <div class="header-actions">
+            <span id="live-indicator" class="status-chip">Idle</span>
+            <button id="reset-button" class="ghost-button" type="button">Reset</button>
+          </div>
+        </div>
+        <div class="panel-intro">
+          <p>Create tasks, mark them done, or add notes.</p>
+        </div>
+        <div id="chat-log" class="chat-log"></div>
+        <form id="chat-form" class="chat-form">
+          <label class="composer-label" for="message-input">Message</label>
+          <textarea
+            id="message-input"
+            name="message"
+            placeholder="Create tasks, complete one, or add detail to an existing task..."
+            rows="4"
+            required
+          ></textarea>
+          <div class="composer-footer">
+            <p id="composer-status" class="composer-status">Ready.</p>
+            <button id="submit-button" type="submit">Send</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel panel-tasks">
+        <div class="panel-header">
+          <div>
+            <p class="eyebrow">Task Register</p>
+            <h2>Tasks</h2>
+          </div>
+        </div>
+        <div class="task-layout">
+          <aside>
+            <ul id="task-list" class="task-list"></ul>
+          </aside>
+          <article id="task-detail" class="task-detail empty-state">
+            Select a task to view its details.
+          </article>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
+

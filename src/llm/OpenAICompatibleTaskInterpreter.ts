@@ -16,11 +16,11 @@ const toolArgsSchema = z.object({
         }),
         z.object({
           type: z.literal("complete_task"),
-          taskId: z.string().trim().min(1)
+          taskId: z.string().uuid()
         }),
         z.object({
           type: z.literal("append_detail"),
-          taskId: z.string().trim().min(1),
+          taskId: z.string().uuid(),
           detail: z.string().trim().min(1)
         })
       ])
@@ -224,3 +224,4 @@ export class OpenAICompatibleTaskInterpreter implements TaskInterpreter {
     return coercePlan(parsed);
   }
 }
+

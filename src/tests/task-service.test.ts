@@ -80,6 +80,7 @@ test("does not duplicate tasks when the same message is processed twice", async 
 
   assert.equal(tasks.length, 2);
   assert.equal(replay.idempotentReplay, true);
+  assert.equal(replay.assistantResponse, "I already processed that message. No duplicate changes were applied.");
 });
 
 test("completes a task from a later message", async () => {

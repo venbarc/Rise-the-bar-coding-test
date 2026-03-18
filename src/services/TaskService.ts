@@ -14,6 +14,8 @@ interface TaskServiceOptions {
   recentConversationLimit?: number;
 }
 
+const IDEMPOTENT_REPLAY_RESPONSE = "I already processed that message. No duplicate changes were applied.";
+
 interface AppliedSummary {
   createdTasks: string[];
   existingTasks: string[];
@@ -152,7 +154,7 @@ export class TaskService {
 
     if (existing) {
       return {
-        assistantResponse: existing.assistantResponse,
+        assistantResponse: IDEMPOTENT_REPLAY_RESPONSE,
         idempotentReplay: true
       };
     }
@@ -174,7 +176,7 @@ export class TaskService {
 
       if (replay) {
         return {
-          assistantResponse: replay.assistantResponse,
+          assistantResponse: IDEMPOTENT_REPLAY_RESPONSE,
           idempotentReplay: true
         };
       }

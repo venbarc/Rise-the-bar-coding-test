@@ -77,10 +77,13 @@ test("does not duplicate tasks when the same message is processed twice", async 
   await service.processUserMessage("Create release tasks");
   const replay = await service.processUserMessage("Create release tasks");
   const tasks = await service.listTasks();
+  const conversation = await service.getConversation();
 
   assert.equal(tasks.length, 2);
   assert.equal(replay.idempotentReplay, true);
   assert.equal(replay.assistantResponse, "I already processed that message. No duplicate changes were applied.");
+  assert.equal(conversation.length, 4);
+  assert.equal(conversation[3]?.content, "I already processed that message. No duplicate changes were applied.");
 });
 
 test("completes a task from a later message", async () => {
@@ -118,4 +121,35 @@ test("attaches a detail and deduplicates the same detail on replay", async () =>
 
   assert.equal(task?.details.length, 1);
   assert.equal(task?.details[0]?.text, "include migration warning");
+});
+
+test("rescues explicit completion requests when the interpreter asks to clarify", async () => {
+  class CreateThenClarifyInterpreter implements TaskInterpreter {
+    async interpret(context: InterpretationContext): Promise<InterpretationResult> {
+      if (context.message === "Create release tasks") {
+        return {
+          kind: "plan",
+          operations: [
+            { type: "create_task", title: "Prepare changelog" },
+            { type: "create_task", title: "Publish release notes" }
+          ]
+        };
+      }
+
+      return {
+        kind: "clarify",
+        question: "Do you want me to mark that task as completed?"
+      };
+    }
+  }
+
+  const service = new TaskService(new InMemoryTaskRepository(), new CreateThenClarifyInterpreter());
+
+  await service.processUserMessage("Create release tasks");
+  const result = await service.processUserMessage("Complete the publish release notes task");
+  const tasks = await service.listTasks();
+  const task = tasks.find((item) => item.title === "Publish release notes");
+
+  assert.match(result.assistantResponse, /Completed 1 task/);
+  assert.equal(task?.status, "completed");
 });

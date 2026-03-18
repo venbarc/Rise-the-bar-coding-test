@@ -278,12 +278,7 @@ chatForm.addEventListener("submit", async (event) => {
     });
 
     replacePendingBubble(payload.assistantResponse, payload.idempotentReplay ? { meta: "Idempotent replay" } : {});
-
-    if (payload.idempotentReplay) {
-      await loadTasks();
-    } else {
-      await refreshData();
-    }
+    await refreshData();
   } catch (error) {
     replacePendingBubble(error.message || "Failed to process message.");
   } finally {

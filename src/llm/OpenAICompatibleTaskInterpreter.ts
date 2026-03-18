@@ -2,6 +2,22 @@ import OpenAI from "openai";
 import { z } from "zod";
 import type { InterpretationContext, InterpretationResult, TaskInterpreter, TaskOperation } from "./TaskInterpreter.js";
 
+interface ChatCompletionClient {
+  chat: {
+    completions: {
+      create: (request: Record<string, unknown>) => Promise<any>;
+    };
+  };
+}
+
+class ToolArgumentParseError extends Error {
+  constructor() {
+    super("Tool arguments failed validation.");
+  }
+}
+
+const RETRYABLE_PARSE_ERROR_MESSAGE = "I couldn't interpret that request reliably. Try splitting it into two shorter task messages.";
+
 const toolArgsSchema = z.object({
   outcome: z.enum(["plan", "clarify", "noop"]),
   clarifyingQuestion: z.string().trim().optional(),
@@ -97,7 +113,8 @@ function buildSystemPrompt(): string {
     "- Do not invent tasks or IDs that are not grounded in the input/context.",
     "- If the user names multiple new tasks in one message, emit multiple create_task operations.",
     "- If the user wants to add a note/update to an existing task, use append_detail rather than create_task.",
-    "- Prefer concise, action-oriented titles when creating tasks."
+    "- Prefer concise, action-oriented titles when creating tasks.",
+    "- Requests like mark X as done, mark X complete, complete X, or finish X should usually map to complete_task when X matches an existing task."
   ].join("\n");
 }
 
@@ -121,6 +138,21 @@ function buildUserPrompt(context: InterpretationContext): string {
       currentTasks: tasks,
       recentConversation: conversation,
       latestUserMessage: context.message
+    },
+    null,
+    2
+  );
+}
+
+function buildRepairPrompt(context: InterpretationContext, invalidArguments: string): string {
+  const basePrompt = JSON.parse(buildUserPrompt(context));
+
+  return JSON.stringify(
+    {
+      ...basePrompt,
+      retryInstruction:
+        "Your previous submit_task_plan function arguments were invalid JSON or failed schema validation. Return corrected function arguments using only exact task IDs from currentTasks. Do not include explanatory prose in any field.",
+      previousInvalidArguments: invalidArguments
     },
     null,
     2
@@ -152,12 +184,12 @@ function parseToolArguments(rawArguments: string): z.infer<typeof toolArgsSchema
   try {
     return toolArgsSchema.parse(JSON.parse(rawArguments));
   } catch {
-    throw new Error("I couldn't interpret that request reliably. Try splitting it into two shorter task messages.");
+    throw new ToolArgumentParseError();
   }
 }
 
 export class OpenAICompatibleTaskInterpreter implements TaskInterpreter {
-  private readonly client: OpenAI;
+  private readonly client: ChatCompletionClient;
   private readonly model: string;
   private readonly maxTokens: number;
 
@@ -168,6 +200,7 @@ export class OpenAICompatibleTaskInterpreter implements TaskInterpreter {
     maxTokens: number;
     openRouterSiteUrl?: string;
     openRouterSiteName?: string;
+    client?: ChatCompletionClient;
   }) {
     const defaultHeaders: Record<string, string> = {};
 
@@ -179,16 +212,42 @@ export class OpenAICompatibleTaskInterpreter implements TaskInterpreter {
       defaultHeaders["X-Title"] = options.openRouterSiteName;
     }
 
-    this.client = new OpenAI({
-      apiKey: options.apiKey,
-      baseURL: options.baseUrl,
-      defaultHeaders: Object.keys(defaultHeaders).length > 0 ? defaultHeaders : undefined
-    });
+    this.client =
+      options.client ??
+      (new OpenAI({
+        apiKey: options.apiKey,
+        baseURL: options.baseUrl,
+        defaultHeaders: Object.keys(defaultHeaders).length > 0 ? defaultHeaders : undefined
+      }) as unknown as ChatCompletionClient);
     this.model = options.model;
     this.maxTokens = options.maxTokens;
   }
 
   async interpret(context: InterpretationContext): Promise<InterpretationResult> {
+    const initialArguments = await this.requestToolArguments(context);
+
+    try {
+      return coercePlan(parseToolArguments(initialArguments));
+    } catch (error) {
+      if (!(error instanceof ToolArgumentParseError)) {
+        throw error;
+      }
+    }
+
+    const repairedArguments = await this.requestToolArguments(context, initialArguments);
+
+    try {
+      return coercePlan(parseToolArguments(repairedArguments));
+    } catch (error) {
+      if (error instanceof ToolArgumentParseError) {
+        throw new Error(RETRYABLE_PARSE_ERROR_MESSAGE);
+      }
+
+      throw error;
+    }
+  }
+
+  private async requestToolArguments(context: InterpretationContext, invalidArguments?: string): Promise<string> {
     const completion = await this.client.chat.completions.create({
       model: this.model,
       temperature: 0,
@@ -200,7 +259,7 @@ export class OpenAICompatibleTaskInterpreter implements TaskInterpreter {
         },
         {
           role: "user",
-          content: buildUserPrompt(context)
+          content: invalidArguments ? buildRepairPrompt(context, invalidArguments) : buildUserPrompt(context)
         }
       ],
       tools: [plannerTool],
@@ -213,15 +272,13 @@ export class OpenAICompatibleTaskInterpreter implements TaskInterpreter {
     });
 
     const toolCall = completion.choices[0]?.message.tool_calls?.find(
-      (call) => call.type === "function" && call.function.name === "submit_task_plan"
+      (call: any) => call.type === "function" && call.function.name === "submit_task_plan"
     );
 
     if (!toolCall || toolCall.type !== "function") {
       throw new Error("LLM response did not include submit_task_plan.");
     }
 
-    const parsed = parseToolArguments(toolCall.function.arguments);
-    return coercePlan(parsed);
+    return toolCall.function.arguments;
   }
 }
-

@@ -331,10 +331,10 @@ class PostgresTaskRepositoryTransaction implements TaskRepositoryTransaction {
         select id, chat_id, role, content, created_at
         from conversation_messages
         where chat_id = ${chatId}
-        order by created_at desc
+        order by created_at desc, id desc
         limit ${limit}
       ) recent
-      order by created_at asc
+      order by created_at asc, id asc
     `;
 
     return rows.map(mapConversation);
@@ -342,8 +342,8 @@ class PostgresTaskRepositoryTransaction implements TaskRepositoryTransaction {
 
   async storeConversationMessage(chatId: string, role: ChatRole, content: string): Promise<void> {
     await this.sql`
-      insert into conversation_messages (chat_id, role, content)
-      values (${chatId}, ${role}, ${content})
+      insert into conversation_messages (chat_id, role, content, created_at)
+      values (${chatId}, ${role}, ${content}, clock_timestamp())
     `;
   }
 
@@ -435,18 +435,6 @@ export class PostgresTaskRepository implements TaskRepository {
         constraint conversation_role_check check (role in ('user', 'assistant'))
       )
     `;
-    await this.sql`
-      create table if not exists processed_messages (
-        id uuid primary key default gen_random_uuid(),
-        chat_id text not null,
-        idempotency_key text not null,
-        original_text text not null,
-        normalized_text text not null,
-        assistant_response text not null,
-        created_at timestamptz not null default now(),
-        constraint processed_messages_unique unique (chat_id, idempotency_key)
-      )
-    `;
     await this.sql`create index if not exists tasks_chat_id_idx on tasks(chat_id)`;
     await this.sql`create index if not exists details_task_id_idx on task_details(task_id)`;
     await this.sql`create index if not exists conversation_chat_created_idx on conversation_messages(chat_id, created_at desc)`;
@@ -477,7 +465,10 @@ export class PostgresTaskRepository implements TaskRepository {
   }
 
   async storeConversationMessage(chatId: string, role: ChatRole, content: string): Promise<void> {
-    return this.transaction.storeConversationMessage(chatId, role, content);
+    await this.sql`
+      insert into conversation_messages (chat_id, role, content, created_at)
+      values (${chatId}, ${role}, ${content}, clock_timestamp())
+    `;
   }
 
   async getProcessedMessage(chatId: string, idempotencyKey: string): Promise<ProcessedMessage | null> {

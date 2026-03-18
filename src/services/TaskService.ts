@@ -42,6 +42,40 @@ function formatCount(count: number, singular: string, plural: string): string {
   return `${count} ${count === 1 ? singular : plural}`;
 }
 
+function findTaskByIndex(tasks: Task[], text: string): Task | null {
+  const match = text.match(/\b(?:task\s*)?(\d+)\b/);
+
+  if (!match) {
+    return null;
+  }
+
+  const index = Number(match[1]) - 1;
+  return tasks[index] ?? null;
+}
+
+function findTaskByTitle(tasks: Task[], normalizedMessage: string): Task | null {
+  const openMatches = tasks.filter((task) => task.status === "open" && normalizedMessage.includes(task.normalizedTitle));
+
+  if (openMatches.length === 1) {
+    return openMatches[0];
+  }
+
+  const allMatches = tasks.filter((task) => normalizedMessage.includes(task.normalizedTitle));
+
+  if (allMatches.length === 1) {
+    return allMatches[0];
+  }
+
+  return null;
+}
+
+function resolveExplicitCompletionTarget(tasks: Task[], normalizedMessage: string): Task | null {
+  if (!/\b(done|complete|completed|finish|finished)\b/.test(normalizedMessage) && !/\bmark\b.*\b(done|complete|completed)\b/.test(normalizedMessage)) {
+    return null;
+  }
+
+  return findTaskByIndex(tasks, normalizedMessage) ?? findTaskByTitle(tasks, normalizedMessage);
+}
 function summarizeAppliedWork(summary: AppliedSummary): string {
   const lines: string[] = [];
 
@@ -153,10 +187,15 @@ export class TaskService {
     const existing = await this.repository.getProcessedMessage(resolvedChatId, idempotencyKey);
 
     if (existing) {
-      return {
-        assistantResponse: IDEMPOTENT_REPLAY_RESPONSE,
-        idempotentReplay: true
-      };
+      return this.repository.withTransaction(async (tx) => {
+        await tx.storeConversationMessage(resolvedChatId, "user", trimmedMessage);
+        await tx.storeConversationMessage(resolvedChatId, "assistant", IDEMPOTENT_REPLAY_RESPONSE);
+
+        return {
+          assistantResponse: IDEMPOTENT_REPLAY_RESPONSE,
+          idempotentReplay: true
+        };
+      });
     }
 
     const [tasks, recentConversation] = await Promise.all([
@@ -164,17 +203,29 @@ export class TaskService {
       this.repository.getRecentConversation(resolvedChatId, this.recentConversationLimit)
     ]);
 
-    const interpretation = await this.interpreter.interpret({
+    const interpreted = await this.interpreter.interpret({
       chatId: resolvedChatId,
       message: trimmedMessage,
       tasks,
       recentConversation
     });
 
+    const explicitCompletionTarget = resolveExplicitCompletionTarget(tasks, normalizedMessage);
+    const interpretation =
+      explicitCompletionTarget && interpreted.kind !== "plan"
+        ? {
+            kind: "plan" as const,
+            operations: [{ type: "complete_task" as const, taskId: explicitCompletionTarget.id }]
+          }
+        : interpreted;
+
     return this.repository.withTransaction(async (tx) => {
       const replay = await tx.getProcessedMessage(resolvedChatId, idempotencyKey);
 
       if (replay) {
+        await tx.storeConversationMessage(resolvedChatId, "user", trimmedMessage);
+        await tx.storeConversationMessage(resolvedChatId, "assistant", IDEMPOTENT_REPLAY_RESPONSE);
+
         return {
           assistantResponse: IDEMPOTENT_REPLAY_RESPONSE,
           idempotentReplay: true
